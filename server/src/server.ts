@@ -4,6 +4,9 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet"
 
+import { IdentifyController } from "./controllers/identify.controller";
+import { errorHandler } from "./middleware/errorHandler";
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -19,6 +22,12 @@ app.get("/health", (_, res) => {
         timestamp: new Date().toISOString(),
     });
 });
+
+// Routes
+const identifyController = new IdentifyController();
+app.post("/identify", identifyController.identify);
+
+app.use(errorHandler);
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
