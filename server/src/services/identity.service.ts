@@ -48,10 +48,21 @@ export class IdentityService {
                 throw new Error("Unable to determine identity root");
             }
 
+            
             /**
              * Determine primary identity id
              */
-            const primaryId = oldest.linkPrecedence === LinkPrecedence.primary ? oldest.id : oldest.linkedId!;
+            let primaryId: number;
+
+            if (oldest.linkPrecedence === LinkPrecedence.primary) {
+                primaryId = oldest.id;
+            } else {
+                if (!oldest.linkedId) {
+                    throw new Error("Invalid contact linkage detected");
+                }
+
+                primaryId = oldest.linkedId;
+            }
 
             /**
              * Fetch full identity cluster

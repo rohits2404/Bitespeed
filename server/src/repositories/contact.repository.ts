@@ -33,20 +33,20 @@ export class ContactRepository {
     }
 
     async findIdentityCluster(primaryId: number) {
-        try {
-            return prisma.contact.findMany({
-                where: {
-                    OR: [
-                        { id: primaryId },
-                        { linkedId: primaryId },
-                    ],
-                },
-                orderBy: { createdAt: "asc" },
-            });
-        } catch (error) {
-            logger.error("findIdentityCluster failed", error);
-            throw error;
-        }
+        return prisma.contact.findMany({
+            where: {
+                OR: [
+                    { id: primaryId },
+                    { linkedId: primaryId },
+                    {
+                        linkedContact: {
+                            linkedId: primaryId
+                        }
+                    }
+                ]
+            },
+            orderBy: { createdAt: "asc" }
+        });
     }
 
     async createPrimary(
