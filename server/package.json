@@ -1,0 +1,25 @@
+{
+    "name": "server",
+    "module": "src/server.ts",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "start": "bun src/server.ts",
+        "dev": "bun --watch src/server.ts"
+    },
+    "devDependencies": {
+        "@types/bun": "latest"
+    },
+    "peerDependencies": {
+        "typescript": "^5"
+    },
+    "dependencies": {
+        "@types/cors": "^2.8.19",
+        "@types/express": "^5.0.6",
+        "cors": "^2.8.6",
+        "dotenv": "^17.3.1",
+        "express": "^5.2.1",
+        "express-rate-limit": "^8.2.1",
+        "helmet": "^8.1.0"
+    }
+}
