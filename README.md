@@ -29,9 +29,7 @@
 
 | Method | Endpoint |
 |--------|----------|
-| `POST` | `https://your-render-url.onrender.com/identify` |
-
-> **Note:** Replace the URL above with your actual deployed endpoint before submission.
+| `POST` | `https://bitespeed-79cw.onrender.com/identify` |
 
 ---
 
