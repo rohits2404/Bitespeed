@@ -32,20 +32,17 @@ export class ContactRepository {
         }
     }
 
-    async findIdentityCluster(primaryId: number) {
+    async findClusterByPrimaryIds(ids: number[]) {
         return prisma.contact.findMany({
             where: {
                 OR: [
-                    { id: primaryId },
-                    { linkedId: primaryId },
-                    {
-                        linkedContact: {
-                            linkedId: primaryId
-                        }
-                    }
+                    { id: { in: ids } },
+                    { linkedId: { in: ids } }
                 ]
             },
-            orderBy: { createdAt: "asc" }
+            orderBy: {
+                createdAt: "asc"
+            }
         });
     }
 

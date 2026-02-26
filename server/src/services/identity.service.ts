@@ -1,3 +1,4 @@
+import { prisma } from "../db";
 import { type Contact, LinkPrecedence } from "../generated/prisma/client";
 import { ContactRepository } from "../repositories/contact.repository";
 import type { IdentifyRequest, IdentifyResponse } from "../types";
@@ -5,131 +6,157 @@ import { logger } from "../utils/logger";
 
 export class IdentityService {
 
-    private repo: ContactRepository;
+    private repo = new ContactRepository();
 
-    constructor() {
-        this.repo = new ContactRepository();
-    }
+    async identify(
+        request: IdentifyRequest
+    ): Promise<IdentifyResponse> {
 
-    async identify(request: IdentifyRequest): Promise<IdentifyResponse> {
-        try {
-            const { email, phoneNumber } = request;
+        const { email, phoneNumber } = request;
 
-            // Find contacts matching email or phone
-            const matches = await this.repo.findMatchingContacts(
+        return prisma.$transaction(async () => {
+
+        /**
+         * STEP 1
+         * Find direct matches
+         */
+        const matches = await this.repo.findMatchingContacts(
+            email,
+            phoneNumber
+        );
+
+        /**
+         * CASE 1 — Completely new user
+         */
+        if (!matches.length) {
+            const primary = await this.repo.createPrimary(
                 email,
                 phoneNumber
             );
 
-            /**
-             * CASE 1
-             * No existing contact → create primary
-             */
-            if (!matches.length) {
-                logger.info("Creating new primary contact");
-
-                const primary = await this.repo.createPrimary(
-                    email,
-                    phoneNumber
-                );
-
-                return this.buildResponse(primary, []);
-            }
-
-            /**
-             * Find oldest contact
-             */
-            const [oldest] = matches.sort(
-                (a, b) =>
-                a.createdAt.getTime() - b.createdAt.getTime()
-            );
-
-            if (!oldest) {
-                throw new Error("Unable to determine identity root");
-            }
-
-            
-            /**
-             * Determine primary identity id
-             */
-            let primaryId: number;
-
-            if (oldest.linkPrecedence === LinkPrecedence.primary) {
-                primaryId = oldest.id;
-            } else {
-                if (!oldest.linkedId) {
-                    throw new Error("Invalid contact linkage detected");
-                }
-
-                primaryId = oldest.linkedId;
-            }
-
-            /**
-             * Fetch full identity cluster
-             */
-            const cluster = await this.repo.findIdentityCluster(primaryId);
-
-            const primary = cluster.find(
-                c => c.linkPrecedence === LinkPrecedence.primary
-            );
-
-            if (!primary) {
-                throw new Error("Primary contact not found");
-            }
-
-            /**
-             * Merge accidental multiple primaries
-             */
-            const extraPrimaries = cluster.filter(c =>
-                c.linkPrecedence === LinkPrecedence.primary &&
-                c.id !== primary.id
-            );
-
-            for (const contact of extraPrimaries) {
-                await this.repo.convertToSecondary(
-                    contact.id,
-                    primary.id
-                );
-            }
-
-            /**
-             * Check if new information exists
-             */
-            const emailExists = email ? cluster.some(c => c.email === email) : true;
-
-            const phoneExists = phoneNumber ? cluster.some(c => c.phoneNumber === phoneNumber) : true;
-
-            let updatedCluster = [...cluster];
-
-            /**
-             * Create secondary if new info introduced
-             */
-            if (!emailExists || !phoneExists) {
-                logger.info("Creating secondary contact");
-
-                const secondary = await this.repo.createSecondary(
-                    primary.id,
-                    email,
-                    phoneNumber
-                );
-
-                updatedCluster.push(secondary);
-            }
-
-            const secondaries = updatedCluster.filter(
-                c => c.linkPrecedence === LinkPrecedence.secondary
-            );
-
-            return this.buildResponse(primary, secondaries);
-
-        } catch (error) {
-            logger.error("Identity resolution failed", error);
-            throw error;
+            return this.buildResponse(primary, []);
         }
-    }
+
+        /**
+         * STEP 2
+         * Collect ALL related identity roots
+         */
+        const rootIds = new Set<number>();
+
+        for (const contact of matches) {
+            if (contact.linkPrecedence === "primary") {
+                rootIds.add(contact.id);
+            }
+
+            if (contact.linkedId) {
+                rootIds.add(contact.linkedId);
+            }
+        }
+
+        /**
+         * STEP 3
+         * Fetch FULL identity cluster
+         */
+        const cluster =
+            await this.repo.findClusterByPrimaryIds([
+                ...rootIds,
+            ]);
+
+        /**
+         * STEP 4
+         * Oldest contact becomes TRUE primary
+         */
+        const sortedCluster = cluster.sort((a, b) =>
+            a.createdAt.getTime() -
+            b.createdAt.getTime()
+        );
+
+        const primary = sortedCluster[0];
+
+        if (!primary) {
+            throw new Error("Primary contact could not be determined");
+        }
+
+        /**
+         * STEP 5
+         * Convert extra primaries → secondary
+         */
+        const extraPrimaries = cluster.filter(
+            c =>
+            c.linkPrecedence ===
+                LinkPrecedence.primary &&
+            c.id !== primary.id
+        );
+
+        for (const contact of extraPrimaries) {
+            await this.repo.convertToSecondary(
+                contact.id,
+                primary.id
+            );
+        }
+
+        /**
+         * STEP 6
+         * Refresh cluster after merge
+         */
+        const updatedCluster =await this.repo.findClusterByPrimaryIds([
+            primary.id,
+        ]);
+
+        /**
+         * STEP 7
+         * Prevent duplicate secondary creation
+         */
+        const emailExists = email
+            ? updatedCluster.some(
+                c => c.email === email
+            )
+        : true;
+
+        const phoneExists = phoneNumber
+        ? updatedCluster.some(
+            c =>
+            c.phoneNumber === phoneNumber
+        ): true;
+
+        let finalCluster = [...updatedCluster];
+
+        /**
+         * STEP 8
+         * Create secondary if new info introduced
+         */
+        if (!emailExists || !phoneExists) {
+            logger.info(
+                "Creating secondary contact"
+            );
+
+            const secondary = await this.repo.createSecondary(
+                primary.id,
+                email,
+                phoneNumber
+            );
+
+            finalCluster.push(secondary);
+        }
+
+        /**
+         * STEP 9
+         * Build response
+         */
+        const secondaries = finalCluster.filter(
+            c =>
+            c.linkPrecedence ===
+            LinkPrecedence.secondary
+        );
+
+        return this.buildResponse(
+            primary,
+            secondaries
+        );
+    })}
 
     /**
-     * Build API response
+     * RESPONSE BUILDER
      */
     private buildResponse(
         primary: Contact,
@@ -137,28 +164,25 @@ export class IdentityService {
     ): IdentifyResponse {
 
         const emails = new Set<string>();
-        const phoneNumbers = new Set<string>();
-        const secondaryContactIds: number[] = [];
+        const phones = new Set<string>();
+        const secondaryIds: number[] = [];
 
         if (primary.email) emails.add(primary.email);
-        if (primary.phoneNumber) phoneNumbers.add(primary.phoneNumber);
+        if (primary.phoneNumber) phones.add(primary.phoneNumber);
 
-        for (const secondary of secondaries) {
-            if (secondary.email)
-                emails.add(secondary.email);
+        for (const sec of secondaries) {
+            if (sec.email) emails.add(sec.email);
+            if (sec.phoneNumber) phones.add(sec.phoneNumber);
 
-            if (secondary.phoneNumber)
-                phoneNumbers.add(secondary.phoneNumber);
-
-            secondaryContactIds.push(secondary.id);
+            secondaryIds.push(sec.id);
         }
 
         return {
             contact: {
                 primaryContactId: primary.id,
                 emails: [...emails],
-                phoneNumbers: [...phoneNumbers],
-                secondaryContactIds,
+                phoneNumbers: [...phones],
+                secondaryContactIds: secondaryIds,
             },
         };
     }
